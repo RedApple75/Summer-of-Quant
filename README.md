@@ -65,21 +65,23 @@ Our development path followed a classic quantitative research cycle:
 
 ---
 
-## 3. Why the New Blended Strategy Works
+### 3. Why the New Blended Strategy Works
 
 The new strategy succeeds because of three key architectural updates:
 
-1. **Soft Probability Blending**: Rather than triggering abrupt shifts to a single regime, the engine calculates a blended allocation weighted by the daily HMM state probabilities:
-   
-   $$\mathbf{w}_{\text{target}, t} = P(\text{Bull}_t)\mathbf{w}_{\text{Bull}, t} + P(\text{Bear}_t)\mathbf{w}_{\text{Bear}, t} + P(\text{Crisis}_t)\mathbf{w}_{\text{Crisis}, t}$$
-   
-   This creates smooth, continuous transitions rather than sudden portfolio churn.
-2. **Exponential Smoothing**: An exponential smoothing filter ($\alpha = 0.03$) is applied to target weights:
-   
-   $$\mathbf{w}_{\text{smooth}, t} = \alpha \mathbf{w}_{\text{target}, t} + (1 - \alpha)\mathbf{w}_{\text{smooth}, t-1}$$
-   
-   This simulates gradual trade execution over time, reducing daily turnover and keeping transaction cost drag low.
-3. **Longer Training History**: Training the HMM on a longer historical range from 2005 to 2024 ensures it witnesses multiple market cycles, including the 2008 financial crisis. This produces stable, well-calibrated transition and emission parameters.
+1. **Soft Probability Blending:** Rather than triggering abrupt shifts to a single regime, the engine calculates a blended allocation weighted by the daily HMM state probabilities:
+
+\[\mathbf{w}_{\text{target}, t} = P(\text{Bull}_t)\mathbf{w}_{\text{Bull}, t} + P(\text{Bear}_t)\mathbf{w}_{\text{Bear}, t} + P(\text{Crisis}_t)\mathbf{w}_{\text{Crisis}, t}\]
+
+This creates smooth, continuous transitions rather than sudden portfolio churn.
+
+2. **Exponential Smoothing:** An exponential smoothing filter ($\alpha = 0.03$) is applied to target weights:
+
+\[\mathbf{w}_{\text{smooth}, t} = \alpha\mathbf{w}_{\text{target}, t} + (1 - \alpha)\mathbf{w}_{\text{smooth}, t-1}\]
+
+This simulates gradual trade execution over time, reducing daily turnover and keeping transaction cost drag low.
+
+3. **Longer Training History:** Training the HMM on a longer historical range from 2005 to 2024 ensures it witnesses multiple market cycles, including the 2008 financial crisis. This produces stable, well-calibrated transition and emission parameters.
 
 ---
 
