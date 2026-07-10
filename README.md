@@ -11,7 +11,7 @@ The out-of-sample backtest covers **2007 to 2023** (1,512 trading days). The eng
 | Strategy | Ann. Return | Ann. Vol | Sharpe | Sortino | Max Drawdown | Calmar |
 |---|---|---|---|---|---|---|
 | Dynamic (gross) | 7.23% | 6.66% | 1.09 | 1.56 | -9.22% | 0.78 |
-| **Dynamic (7bps net)** | **4.88%** | **6.66%** | **0.73** | **1.05** | **-9.79%** | **0.50** |
+| Dynamic (7bps net) | 4.88% | 6.66% | 0.73 | 1.05 | -9.79% | 0.50 |
 | Static 60/40 | 7.84% | 12.40% | 0.63 | 0.81 | -19.42% | 0.40 |
 | Equal Weight (1/3) | 8.68% | 10.41% | 0.83 | 1.13 | -15.97% | 0.54 |
 
@@ -44,20 +44,20 @@ Our development path followed a classic quantitative research cycle:
      │ 2. One-day rebalancing lag                            │
      │ 3. Bond-Equity correlation breakdown in 2022          │
      │ 4. Short training data starvation                     │
-     └──────────────┬────────────────────────────────────────┘
-                    │
-                    ▼
+     └──────────────────────────┬────────────────────────────┘
+                                │
+                                ▼
      ┌───────────────────────────────────────────────────────┐
      │                  DEVELOP THE FIXES:                   │
      │ 1. Blend weights with state probabilities             │
      │ 2. Apply exponential smoothing filter                 │
      │ 3. Ingest 2005-2024 range for long history            │
-     └──────────────────────┬────────────────────────────────┘
-                            │
-                    ▼
-                  ┌──────────────────────────────┐
-                  │ Positive Outperformance Net  │
-                  └──────────────────────────────┘
+     └─────────────────────────┬─────────────────────────────┘
+                               │
+                               ▼
+                   ┌──────────────────────────────┐
+                   │ Positive Outperformance Net  │
+                   └──────────────────────────────┘
 ```
 
 ---
@@ -66,12 +66,8 @@ Our development path followed a classic quantitative research cycle:
 
 The new strategy succeeds because of three key architectural updates:
 
-1. **Soft Probability Blending**: Instead of forcing a hard switch to a single regime's target portfolio, the engine calculates a blended allocation weighted by the daily HMM posterior state probabilities:
-   $$\mathbf{w}_{\text{target}, t} = P(\text{Bull}_t)\mathbf{w}_{\text{Bull}, t} + P(\text{Bear}_t)\mathbf{w}_{\text{Bear}, t} + P(\text{Crisis}_t)\mathbf{w}_{\text{Crisis}, t}$$
-   This creates smooth, continuous transitions rather than sudden portfolio churn.
-2. **Exponential Smoothing of Portfolio Weights**: We apply an exponential smoothing filter ($\alpha = 0.03$) to the blended target weights:
-   $$\mathbf{w}_{\text{smooth}, t} = \alpha \mathbf{w}_{\text{target}, t} + (1 - \alpha)\mathbf{w}_{\text{smooth}, t-1}$$
-   This simulates gradual trade execution over time, reducing daily turnover and keeping transaction cost drag low.
+1. **Soft Probability Blending**: Instead of forcing a hard switch to a single regime's target portfolio, the engine calculates a blended allocation weighted by the daily HMM posterior state probabilities: $\mathbf{w}_{\text{target}, t} = P(\text{Bull}_t)\mathbf{w}_{\text{Bull}, t} + P(\text{Bear}_t)\mathbf{w}_{\text{Bear}, t} + P(\text{Crisis}_t)\mathbf{w}_{\text{Crisis}, t}$. This creates smooth, continuous transitions rather than sudden portfolio churn.
+2. **Exponential Smoothing of Portfolio Weights**: We apply an exponential smoothing filter ($\alpha = 0.03$) to the blended target weights: $\mathbf{w}_{\text{smooth}, t} = \alpha \mathbf{w}_{\text{target}, t} + (1 - \alpha)\mathbf{w}_{\text{smooth}, t-1}$. This simulates gradual trade execution over time, reducing daily turnover and keeping transaction cost drag low.
 3. **Longer Training History (2005-2024)**: Training the HMM on a longer historical range ensures it witnesses multiple market cycles, including the 2008 global financial crisis. This produces stable, well-calibrated transition and emission parameters.
 
 ---
@@ -183,9 +179,9 @@ The model parameters ($A, \boldsymbol{\mu}_k, \boldsymbol{\Sigma}_k$) are optimi
 - **M-step**: Updates transition values and Gaussian parameters using $\gamma_t(k)$ weights.
 
 ### D. CVXPY Portfolio Optimizations
-- **Tangency Portfolio (Max Sharpe)**:
+* **Tangency Portfolio (Max Sharpe)**:
   $$\min_{\mathbf{y}} \mathbf{y}^\top \boldsymbol{\Sigma} \mathbf{y} \quad \text{s.t.} \quad \boldsymbol{\mu}^\top \mathbf{y} = 1, \mathbf{y} \geq 0 \quad \implies \quad \mathbf{w}_{\text{Bull}} = \frac{\mathbf{y}}{\sum y_i}$$
-- **Minimum Variance Portfolio**:
+* **Minimum Variance Portfolio**:
   $$\min_{\mathbf{w}} \mathbf{w}^\top \boldsymbol{\Sigma} \mathbf{w} \quad \text{s.t.} \quad \sum w_i = 1, \mathbf{w} \geq 0$$
 
 ---
