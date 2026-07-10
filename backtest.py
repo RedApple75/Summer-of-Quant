@@ -169,6 +169,88 @@ def run_backtest(feat_df, regimes, asset_returns, lookback=252, tx_cost_bps=7):
     }
 
 
+def run_backtest_probabilities(feat_df, regime_probs, asset_returns, lookback=252, tx_cost_bps=7, alpha_smooth=0.05):
+    """
+    Runs a blended portfolio backtest using daily regime probabilities.
+    Smooths target weights using exponential smoothing to manage transaction costs.
+    """
+    tx_cost = tx_cost_bps / 10_000
+    dates = regime_probs.index
+    rets_slice = asset_returns.loc[dates]
+
+    assets = rets_slice.columns.tolist()
+    n = len(assets)
+
+    strategy_gross = pd.Series(index=dates, dtype=float)
+    strategy_net = pd.Series(index=dates, dtype=float)
+    static_6040 = pd.Series(index=dates, dtype=float)
+    equal_weight = pd.Series(index=dates, dtype=float)
+
+    # Initial state
+    current_w = np.ones(n) / n
+    static_w = np.array([0.6, 0.3, 0.1])
+
+    # Cache optimized candidate weights to save compute time (only recalculate every 5 days)
+    cached_w_bull = np.array([1/3, 1/3, 1/3])
+    cached_w_bear = np.array([1/3, 1/3, 1/3])
+    cached_w_crisis = np.array([1/3, 1/3, 1/3])
+
+    print("Running blended probability backtest...")
+
+    for i, date in enumerate(dates):
+        day_ret = rets_slice.loc[date].values
+        probs = regime_probs.loc[date].values  # Bull, Bear, Crisis probabilities
+
+        # Re-estimate and optimize every 5 trading days to speed up execution
+        if i % 5 == 0 or i == 0:
+            hist = asset_returns.loc[:date].iloc[-lookback:]
+            if len(hist) < 30:
+                mu_est = pd.Series(np.zeros(n), index=assets)
+                cov_est = pd.DataFrame(np.eye(n) * 0.01, index=assets, columns=assets)
+            else:
+                mu_est = hist.mean() * 252
+                cov_est = hist.cov() * 252
+
+            # Optimize portfolios for each candidate state
+            cached_w_bull = max_sharpe_weights(mu_est, cov_est)
+            cached_w_bear = risk_parity_weights(cov_est)
+            cached_w_crisis = min_variance_weights(cov_est)
+
+        # Blend targets using state probabilities
+        target_w = (probs[0] * cached_w_bull + 
+                    probs[1] * cached_w_bear + 
+                    probs[2] * cached_w_crisis)
+        
+        # Normalize target weights to ensure they sum to exactly 1.0
+        target_w = np.maximum(target_w, 0)
+        target_w /= target_w.sum()
+
+        # Apply exponential smoothing to obtain smooth trade execution weights
+        new_w = alpha_smooth * target_w + (1.0 - alpha_smooth) * current_w
+        new_w /= new_w.sum()
+
+        # Strategy return calculation
+        gross_ret = new_w @ day_ret
+        turnover = np.abs(new_w - current_w).sum()
+        cost = turnover * tx_cost
+
+        strategy_gross.loc[date] = gross_ret
+        strategy_net.loc[date] = gross_ret - cost
+        current_w = new_w.copy()
+
+        # Benchmarks
+        static_6040.loc[date] = static_w @ day_ret
+        equal_weight.loc[date] = (np.ones(n) / n) @ day_ret
+
+    return {
+        "strategy_gross": strategy_gross,
+        "strategy_net": strategy_net,
+        "static_6040": static_6040,
+        "equal_weight": equal_weight,
+    }
+
+
+
 
 # ─── Performance Metrics ─────────────────────────────────────────────────────
 
@@ -215,11 +297,26 @@ def plot_equity_curves(results, feat_df, regimes, output_path="equity_curve.png"
         ax1.plot(cum.index, cum.values, color=color, lw=1.5, label=labels[key])
 
     # Regime shading on top chart
-    regime_colors = {0: "#a5d6a7", 1: "#ffe082", 2: "#ef9a9a"}
+    # If regimes is a Series (hard states), do normal color shading.
+    # If regimes is a DataFrame (probabilities), do custom probability-blended shading.
     dates = regimes.index
-    for i in range(len(dates) - 1):
-        state = int(regimes.iloc[i])
-        ax1.axvspan(dates[i], dates[i+1], color=regime_colors[state], alpha=0.15)
+    if isinstance(regimes, pd.DataFrame):
+        # We blend colors: Bull=Green, Bear=Orange, Crisis=Red
+        # Normalized RGB values
+        c_bull = np.array([165, 214, 167]) / 255.0
+        c_bear = np.array([255, 224, 130]) / 255.0
+        c_crit = np.array([239, 154, 154]) / 255.0
+
+        for i in range(len(dates) - 1):
+            probs = regimes.iloc[i].values # Bull, Bear, Crisis
+            # Blended RGB
+            blend_color = probs[0] * c_bull + probs[1] * c_bear + probs[2] * c_crit
+            ax1.axvspan(dates[i], dates[i+1], color=blend_color, alpha=0.18, linewidth=0)
+    else:
+        regime_colors = {0: "#a5d6a7", 1: "#ffe082", 2: "#ef9a9a"}
+        for i in range(len(dates) - 1):
+            state = int(regimes.iloc[i])
+            ax1.axvspan(dates[i], dates[i+1], color=regime_colors[state], alpha=0.15)
 
     ax1.set_title("Regime-Driven TAA Engine vs Static Benchmarks", fontsize=15, fontweight="bold")
     ax1.set_ylabel("Cumulative Return (log-scale)", fontsize=11)

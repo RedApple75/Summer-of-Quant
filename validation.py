@@ -93,6 +93,68 @@ def run_walk_forward(features_df, feature_cols, n_splits=5, min_train_size=252,
     return all_test_regimes.dropna()
 
 
+def run_walk_forward_probabilities(features_df, feature_cols, n_splits=5, min_train_size=252,
+                                  test_size=63, n_components=3, random_state=42):
+    """
+    Runs walk-forward validation and returns posterior probabilities of each state
+    mapped consistently to Bull (col 0), Bear (col 1), and Crisis (col 2).
+    """
+    n_obs = len(features_df)
+    splits = list(expanding_walk_forward_splits(n_obs, n_splits, min_train_size, test_size))
+
+    # Output DataFrame for probabilities
+    prob_cols = ["Bull_prob", "Bear_prob", "Crisis_prob"]
+    all_probs = pd.DataFrame(index=features_df.index, columns=prob_cols, dtype=float)
+
+    for fold, (train_idx, test_idx) in enumerate(splits):
+        train_df = features_df.iloc[train_idx]
+        test_df  = features_df.iloc[test_idx]
+
+        mu    = train_df[feature_cols].mean()
+        sigma = train_df[feature_cols].std().replace(0, 1)
+
+        X_train = ((train_df[feature_cols] - mu) / sigma).values
+        X_test  = ((test_df[feature_cols]  - mu) / sigma).values
+
+        model = hmm.GaussianHMM(
+            n_components=n_components,
+            covariance_type="diag",
+            n_iter=100,
+            random_state=random_state
+        )
+        model.fit(X_train)
+
+        # Get state probabilities
+        raw_probs = model.predict_proba(X_test)  # Shape (N_test, n_components)
+        raw_states = model.predict(X_test)
+
+        # Build mapping based on training average volatility
+        # Map each raw state to Bull/Bear/Crisis based on volatility of that state on the training set
+        train_state_vol = []
+        train_raw_states = model.predict(X_train)
+        temp_train = pd.DataFrame({"state": train_raw_states, "vol": train_df["vol_21d"].values})
+        state_vol_mean = temp_train.groupby("state")["vol"].mean()
+        
+        # If any component wasn't predicted in training, give it a default ordering
+        for comp in range(n_components):
+            if comp not in state_vol_mean:
+                state_vol_mean[comp] = 999.0 if comp == 2 else (0.0 if comp == 0 else 0.1)
+                
+        state_vol_mean = state_vol_mean.sort_values()
+        # map: raw state -> sorted index (0=lowest vol, 1=med, 2=highest)
+        state_map = {orig: mapped for mapped, orig in enumerate(state_vol_mean.index)}
+
+        # Reorder probabilities according to state_map
+        mapped_probs = np.zeros_like(raw_probs)
+        for orig, mapped in state_map.items():
+            mapped_probs[:, mapped] = raw_probs[:, orig]
+
+        all_probs.iloc[test_idx] = mapped_probs
+
+    return all_probs.dropna()
+
+
+
 if __name__ == "__main__":
     from data_pipeline import load_data
     from features import compute_features

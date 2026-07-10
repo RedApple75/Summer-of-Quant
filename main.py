@@ -1,8 +1,8 @@
 """
 main.py — Full pipeline orchestrator.
 
-Runs end-to-end: data → features → HMM (full-sample) → walk-forward validation
-→ portfolio optimization → backtest → performance summary and charts.
+Runs end-to-end: data (2005-2024) → features → HMM (full-sample) → walk-forward validation (probabilities)
+→ portfolio optimization (blended) → backtest (smoothed) → performance summary and charts.
 """
 
 import numpy as np
@@ -10,14 +10,13 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from hmmlearn import hmm
+import os
 
 from data_pipeline      import load_data
 from features           import compute_features
 from regime_classifier  import fit_hmm, map_states_by_volatility, plot_regimes
-from validation         import run_walk_forward
-from backtest           import run_backtest, compute_metrics, plot_equity_curves
+from validation         import run_walk_forward_probabilities
+from backtest           import run_backtest_probabilities, compute_metrics, plot_equity_curves
 
 
 def print_section(title):
@@ -27,9 +26,12 @@ def print_section(title):
 
 
 def main():
+    # Ensure charts directory exists
+    os.makedirs("charts", exist_ok=True)
+
     # ─── 1. Data ─────────────────────────────────────────────────────────────
     print_section("1 / 6   Data Ingestion")
-    df = load_data(start_date="2015-01-01", end_date="2024-01-01")
+    df = load_data(start_date="2005-01-01", end_date="2024-01-01")
     asset_returns = df[["SPY_ret", "TLT_ret", "GLD_ret"]].rename(
         columns={"SPY_ret": "SPY", "TLT_ret": "TLT", "GLD_ret": "GLD"}
     )
@@ -41,6 +43,12 @@ def main():
     print_section("2 / 6   Feature Engineering")
     feat_df = compute_features(df)
     feature_cols = ["mom_21d_zscore", "vol_21d_zscore"]
+    
+    # Align returns
+    common_idx = feat_df.index.intersection(asset_returns.index)
+    feat_df = feat_df.loc[common_idx]
+    asset_returns = asset_returns.loc[common_idx]
+    
     print(f"Feature rows after NaN drop: {len(feat_df)}")
     print(f"Features fed to HMM: {feature_cols}")
 
@@ -54,20 +62,25 @@ def main():
     print("\nFull-sample regime distribution:")
     for k, v in full_states.map(label_map).value_counts().sort_index().items():
         print(f"  {k:<8}: {v} days")
-    plot_regimes(feat_df, full_states, "regime_overlay.png")
+    
+    # Save regime overlay to charts directory
+    plot_regimes(feat_df, full_states, "charts/regime_overlay.png")
 
     # ─── 4. Walk-Forward Validation ──────────────────────────────────────────
-    print_section("4 / 6   Walk-Forward Validation")
-    regimes = run_walk_forward(feat_df, feature_cols, n_splits=8,
-                               min_train_size=252, test_size=63)
-    print(f"\nOut-of-sample coverage: {len(regimes)} days")
-    print("Out-of-sample regime distribution:")
-    for k, v in regimes.map(label_map).value_counts().sort_index().items():
-        print(f"  {k:<8}: {v} days")
+    print_section("4 / 6   Walk-Forward Validation (Probabilities)")
+    regime_probs = run_walk_forward_probabilities(
+        feat_df, feature_cols, n_splits=12, min_train_size=504, test_size=126
+    )
+    print(f"\nOut-of-sample coverage: {len(regime_probs)} days")
+    print("Regime probability stats:")
+    print(regime_probs.describe())
 
     # ─── 5. Backtest ─────────────────────────────────────────────────────────
-    print_section("5 / 6   Portfolio Optimization & Backtest")
-    results = run_backtest(feat_df, regimes, asset_returns, tx_cost_bps=7)
+    print_section("5 / 6   Portfolio Optimization & Backtest (Blended)")
+    # Using alpha_smooth=0.03 to balance transactions costs
+    results = run_backtest_probabilities(
+        feat_df, regime_probs, asset_returns, lookback=252, tx_cost_bps=7, alpha_smooth=0.03
+    )
 
     # ─── 6. Performance Summary ───────────────────────────────────────────────
     print_section("6 / 6   Performance Summary")
@@ -80,6 +93,7 @@ def main():
 
     print(f"\n{'Strategy':<22} {'Ann.Ret':>8} {'Vol':>7} {'Sharpe':>7} "
           f"{'Sortino':>8} {'MaxDD':>9} {'Calmar':>7}")
+    # Fix formatting print using compute_metrics labels
     print("-" * 72)
     for label, ret_series in strategies.items():
         m = compute_metrics(ret_series, label=label)
@@ -87,12 +101,12 @@ def main():
               f"{m['Sharpe']:>7} {m['Sortino']:>8} {m['Max Drawdown']:>9} {m['Calmar']:>7}")
 
     # ─── Charts ───────────────────────────────────────────────────────────────
-    plot_equity_curves(results, feat_df, regimes, "equity_curve.png")
+    plot_equity_curves(results, feat_df, regime_probs, "charts/equity_curve.png")
 
     print("\nDone. Pipeline complete.")
     print("  Outputs saved:")
-    print("    regime_overlay.png  - SPY price with Bull/Bear/Crisis shading")
-    print("    equity_curve.png    - strategy vs benchmarks with drawdown panel")
+    print("    charts/regime_overlay.png  - SPY price with Bull/Bear/Crisis shading")
+    print("    charts/equity_curve.png    - strategy vs benchmarks with drawdown panel")
 
 
 if __name__ == "__main__":
