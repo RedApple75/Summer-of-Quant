@@ -1,4 +1,12 @@
+# Prerequisites and project guides
 prerequisites/
+
+# Python environment and caches
+.venv/
 .ipynb_checkpoints/
 __pycache__/
 *.pyc
+*.pyo
+
+# Helper/scratch scripts not part of deliverables
+parse_notebook.py
