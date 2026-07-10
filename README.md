@@ -66,8 +66,16 @@ Our development path followed a classic quantitative research cycle:
 
 The new strategy succeeds because of three key architectural updates:
 
-1. **Soft Probability Blending**: Instead of forcing a hard switch to a single regime's target portfolio, the engine calculates a blended allocation weighted by the daily HMM posterior state probabilities: $\mathbf{w}_{\text{target}, t} = P(\text{Bull}_t)\mathbf{w}_{\text{Bull}, t} + P(\text{Bear}_t)\mathbf{w}_{\text{Bear}, t} + P(\text{Crisis}_t)\mathbf{w}_{\text{Crisis}, t}$. This creates smooth, continuous transitions rather than sudden portfolio churn.
-2. **Exponential Smoothing of Portfolio Weights**: We apply an exponential smoothing filter ($\alpha = 0.03$) to the blended target weights: $\mathbf{w}_{\text{smooth}, t} = \alpha \mathbf{w}_{\text{target}, t} + (1 - \alpha)\mathbf{w}_{\text{smooth}, t-1}$. This simulates gradual trade execution over time, reducing daily turnover and keeping transaction cost drag low.
+1. **Soft Probability Blending**: Instead of forcing a hard switch to a single regime's target portfolio, the engine calculates a blended allocation weighted by the daily HMM posterior state probabilities:
+   
+   $$\mathbf{w}_{\text{target}, t} = P(\text{Bull}_t)\mathbf{w}_{\text{Bull}, t} + P(\text{Bear}_t)\mathbf{w}_{\text{Bear}, t} + P(\text{Crisis}_t)\mathbf{w}_{\text{Crisis}, t}$$
+   
+   This creates smooth, continuous transitions rather than sudden portfolio churn.
+2. **Exponential Smoothing of Portfolio Weights**: We apply an exponential smoothing filter ($\alpha = 0.03$) to the blended target weights:
+   
+   $$\mathbf{w}_{\text{smooth}, t} = \alpha \mathbf{w}_{\text{target}, t} + (1 - \alpha)\mathbf{w}_{\text{smooth}, t-1}$$
+   
+   This simulates gradual trade execution over time, reducing daily turnover and keeping transaction cost drag low.
 3. **Longer Training History (2005-2024)**: Training the HMM on a longer historical range ensures it witnesses multiple market cycles, including the 2008 global financial crisis. This produces stable, well-calibrated transition and emission parameters.
 
 ---
@@ -190,7 +198,15 @@ The model parameters ($A, \boldsymbol{\mu}_k, \boldsymbol{\Sigma}_k$) are optimi
 
 Throughout the project, we iterated on HMM structures, features, and risk overlays to boost returns and limit drawdowns. The logs below summarize our key findings.
 
-### A. HMM Architecture Comparison (Iteration 3)
+### A. Transaction Cost and Rebalancing Lag Optimization (Iteration 2)
+* **Problem:** The initial hard-switching model collapsed due to massive transaction cost drag from frequent regime swaps and rebalancing lag during sudden crashes (e.g. March 2020).
+* **Solution:** 
+  1. We transitioned from hard switches to **soft probability blending** based on posterior HMM state probabilities.
+  2. We implemented **asymmetric weight smoothing** ($\alpha_{\text{down}} = 0.15$ to reduce equity weight, $\alpha_{\text{up}} = 0.02$ to increase equity weight) to exit equity exposure rapidly during pullbacks while entering bull phases slowly.
+  3. We added a **0.5% micro-trade turnover hurdle** to completely eliminate minor daily rebalances that compounded transaction cost drag.
+* **Impact:** Reduced transaction cost drag by over 95%, transforming a -64.66% net return into a stable, market-outperforming positive return profile (S5 Combined Champion).
+
+### B. HMM Architecture Comparison (Iteration 3)
 We backtested 5 HMM models using the same optimized backtesting harness (asymmetric smoothing + cash overlay + 0.5% micro-trade hurdle) to find the best-performing regime detector:
 * **HMM A (3-State Diagonal Gaussian):** Sharpe **1.00**, Ann. Return **8.05%**, Max Drawdown **-6.15%**. Robust and clean state separation.
 * **HMM B (3-State Full Gaussian):** Sharpe **1.00**, Ann. Return **7.59%**, Max Drawdown **-6.16%**. Captured joint correlations between features.
@@ -200,12 +216,12 @@ We backtested 5 HMM models using the same optimized backtesting harness (asymmet
 
 *Conclusion:* The 3-state HMM architectures represent the optimal model size, cleanly identifying Bull, Bear, and Crisis regimes.
 
-### B. Zero Lower Bound Interest Rate Filter (Iteration 4)
+### C. Zero Lower Bound Interest Rate Filter (Iteration 4)
 * **Problem:** In 2022, long-term bonds crashed in tandem with stocks because of low yields.
 * **Solution:** We integrated a **Zero Lower Bound (ZLB) filter** utilizing the 10-Year Treasury Yield (TNX). If the TNX yield drops below 2.0%, we cap the TLT bond allocation at 10% and route excess capital to cash (BIL).
 * **Impact (HMM F):** Reduced portfolio volatility to **7.12%** (down from 7.60% for HMM B), shielding the strategy from the stock-bond breakdown.
 
-### C. Aggressive Overlay Strategies (Iteration 5)
+### D. Aggressive Overlay Strategies (Iteration 5)
 * **Problem:** ZLB and cash overlays reduced volatility but left returns slightly lagging the benchmark.
 * **Solution G:** We implemented a **1.5x Bull leverage** overlay during high-probability Bull states (paying 4% borrowing costs) and unwound leverage early when entering Crisis.
 * **Solution H:** We implemented a **20% tactical shorting** overlay (short SPY) during Crisis states to actively profit from market crashes.
