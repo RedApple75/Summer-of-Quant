@@ -169,17 +169,29 @@ def run_backtest(feat_df, regimes, asset_returns, lookback=252, tx_cost_bps=7):
     }
 
 
-def run_backtest_probabilities(feat_df, regime_probs, asset_returns, lookback=252, tx_cost_bps=7, alpha_smooth=0.05):
+def run_backtest_probabilities(feat_df, regime_probs, asset_returns, lookback=252, tx_cost_bps=7, 
+                               alpha_smooth=0.05, cash_overlay=False, tnx_series=None, zlb_active=False,
+                               leverage_factor=1.0, short_equity_allocation=0.0, borrow_cost_ann=0.04, asymmetric_smoothing=False):
     """
     Runs a blended portfolio backtest using daily regime probabilities.
-    Smooths target weights using exponential smoothing to manage transaction costs.
+    Includes advanced options for cash overlay, ZLB interest rate protection, leverage, and shorting.
     """
     tx_cost = tx_cost_bps / 10_000
     dates = regime_probs.index
-    rets_slice = asset_returns.loc[dates]
+    
+    # If cash_overlay is active, we separate core assets from cash
+    if cash_overlay:
+        core_assets = ["SPY", "TLT", "GLD"]
+        cash_asset = "BIL"
+        all_assets = core_assets + [cash_asset]
+    else:
+        # If cash_overlay is False, we use the assets passed in the asset_returns dataframe columns
+        core_assets = [c for c in asset_returns.columns if c != "BIL"]
+        all_assets = list(asset_returns.columns)
 
-    assets = rets_slice.columns.tolist()
-    n = len(assets)
+    rets_slice = asset_returns.loc[dates, all_assets]
+    n_core = len(core_assets)
+    n_all = len(all_assets)
 
     strategy_gross = pd.Series(index=dates, dtype=float)
     strategy_net = pd.Series(index=dates, dtype=float)
@@ -187,13 +199,15 @@ def run_backtest_probabilities(feat_df, regime_probs, asset_returns, lookback=25
     equal_weight = pd.Series(index=dates, dtype=float)
 
     # Initial state
-    current_w = np.ones(n) / n
-    static_w = np.array([0.6, 0.3, 0.1])
+    current_w = np.ones(n_all) / n_all
+    static_w = np.array([0.6, 0.3, 0.1]) # SPY 60 / TLT 30 / GLD 10 benchmark
 
     # Cache optimized candidate weights to save compute time (only recalculate every 5 days)
-    cached_w_bull = np.array([1/3, 1/3, 1/3])
-    cached_w_bear = np.array([1/3, 1/3, 1/3])
-    cached_w_crisis = np.array([1/3, 1/3, 1/3])
+    cached_w_bull = np.ones(n_core) / n_core
+    cached_w_bear = np.ones(n_core) / n_core
+    cached_w_crisis = np.ones(n_core) / n_core
+
+    spy_idx = all_assets.index("SPY") if "SPY" in all_assets else 0
 
     print("Running blended probability backtest...")
 
@@ -203,10 +217,10 @@ def run_backtest_probabilities(feat_df, regime_probs, asset_returns, lookback=25
 
         # Re-estimate and optimize every 5 trading days to speed up execution
         if i % 5 == 0 or i == 0:
-            hist = asset_returns.loc[:date].iloc[-lookback:]
+            hist = asset_returns.loc[:date, core_assets].iloc[-lookback:]
             if len(hist) < 30:
-                mu_est = pd.Series(np.zeros(n), index=assets)
-                cov_est = pd.DataFrame(np.eye(n) * 0.01, index=assets, columns=assets)
+                mu_est = pd.Series(np.zeros(n_core), index=core_assets)
+                cov_est = pd.DataFrame(np.eye(n_core) * 0.01, index=core_assets, columns=core_assets)
             else:
                 mu_est = hist.mean() * 252
                 cov_est = hist.cov() * 252
@@ -216,37 +230,112 @@ def run_backtest_probabilities(feat_df, regime_probs, asset_returns, lookback=25
             cached_w_bear = risk_parity_weights(cov_est)
             cached_w_crisis = min_variance_weights(cov_est)
 
-        # Blend targets using state probabilities
-        target_w = (probs[0] * cached_w_bull + 
-                    probs[1] * cached_w_bear + 
-                    probs[2] * cached_w_crisis)
+        # Blend core assets targets using daily regime probabilities
+        n_components = len(probs)
+        if n_components == 2:
+            target_w_core = probs[0] * cached_w_bull + probs[1] * cached_w_crisis
+        elif n_components == 3:
+            target_w_core = (probs[0] * cached_w_bull + 
+                             probs[1] * cached_w_bear + 
+                             probs[2] * cached_w_crisis)
+        elif n_components == 4:
+            target_w_core = (probs[0] * cached_w_bull + 
+                             (probs[1] + probs[2]) * cached_w_bear + 
+                             probs[3] * cached_w_crisis)
+        else:
+            target_w_core = cached_w_bear
+
+        target_w_core = np.maximum(target_w_core, 0)
+        target_w_core /= (target_w_core.sum() + 1e-12)
+
+        # Build final target portfolio
+        if cash_overlay:
+            # Shift weight to cash based on crisis probability
+            crisis_prob = probs[-1]
+            target_w = np.zeros(n_all)
+            target_w[0:3] = target_w_core * (1.0 - crisis_prob)
+            target_w[3] = crisis_prob
+        else:
+            target_w = target_w_core.copy()
+
+        # Zero Lower Bound bond hedge check
+        if zlb_active and tnx_series is not None:
+            yield_val = tnx_series.loc[date]
+            if yield_val < 2.0:  # 10Y yield below 2.0%
+                tlt_idx = all_assets.index("TLT") if "TLT" in all_assets else -1
+                if tlt_idx != -1 and target_w[tlt_idx] > 0.10:
+                    excess = target_w[tlt_idx] - 0.10
+                    target_w[tlt_idx] = 0.10
+                    # Route excess to cash (BIL) if available
+                    bil_idx = all_assets.index("BIL") if "BIL" in all_assets else -1
+                    if bil_idx != -1:
+                        target_w[bil_idx] += excess
+                    else:
+                        non_tlt_mask = np.ones(n_all, dtype=bool)
+                        non_tlt_mask[tlt_idx] = False
+                        if target_w[non_tlt_mask].sum() > 0:
+                            target_w[non_tlt_mask] += excess * (target_w[non_tlt_mask] / target_w[non_tlt_mask].sum())
+                        else:
+                            target_w[non_tlt_mask] += excess / (n_all - 1)
+
+        # Apply leverage in Bull regimes
+        bull_prob = probs[0]
+        current_leverage = 1.0 + (leverage_factor - 1.0) * bull_prob
         
-        # Normalize target weights to ensure they sum to exactly 1.0
         target_w = np.maximum(target_w, 0)
-        target_w /= target_w.sum()
+        target_w /= (target_w.sum() + 1e-12)
+        target_w *= current_leverage
 
-        # Apply exponential smoothing to obtain smooth trade execution weights
-        new_w = alpha_smooth * target_w + (1.0 - alpha_smooth) * current_w
-        new_w /= new_w.sum()
+        # Determine smoothing rate (alpha)
+        if asymmetric_smoothing:
+            if target_w[spy_idx] < current_w[spy_idx]:
+                alpha = 0.15
+            else:
+                alpha = 0.02
+        else:
+            alpha = alpha_smooth
 
-        # Strategy return calculation
-        gross_ret = new_w @ day_ret
+        proposed_w = alpha * target_w + (1.0 - alpha) * current_w
+
+        if np.abs(proposed_w - current_w).sum() < 0.005:
+            new_w = current_w.copy()
+        else:
+            new_w = proposed_w
+
+        # Returns and turnover cost
+        # Base asset returns
+        asset_rets = new_w @ day_ret
+        
+        # Tactical shorting during Crisis regimes (short SPY)
+        crisis_prob = probs[-1]
+        short_return = 0.0
+        if short_equity_allocation > 0.0:
+            short_w = crisis_prob * short_equity_allocation
+            short_return = -short_w * day_ret[spy_idx]
+        
+        # Borrowing cost on the leveraged portion
+        w_sum = new_w.sum()
+        borrow_cost = 0.0
+        if w_sum > 1.0:
+            borrowed_amount = w_sum - 1.0
+            borrow_cost = borrowed_amount * (borrow_cost_ann / 252)
+
+        gross_ret = asset_rets + short_return - borrow_cost
+        
         turnover = np.abs(new_w - current_w).sum()
         cost = turnover * tx_cost
 
         strategy_gross.loc[date] = gross_ret
         strategy_net.loc[date] = gross_ret - cost
-        current_w = new_w.copy()
-
-        # Benchmarks
-        static_6040.loc[date] = static_w @ day_ret
-        equal_weight.loc[date] = (np.ones(n) / n) @ day_ret
+        # Benchmarks (core assets only)
+        static_6040.loc[date] = static_w @ rets_slice.loc[date, ["SPY", "TLT", "GLD"]].values
+        equal_weight.loc[date] = (np.ones(n_core)/n_core) @ rets_slice.loc[date, core_assets].values
 
     return {
         "strategy_gross": strategy_gross,
-        "strategy_net": strategy_net,
-        "static_6040": static_6040,
-        "equal_weight": equal_weight,
+        "strategy_net":   strategy_net,
+        "static_6040":    static_6040,
+        "equal_weight":   equal_weight,
     }
 
 

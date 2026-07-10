@@ -12,10 +12,10 @@ def fit_hmm(features_df, feature_cols, n_components=3, random_state=42):
     print(f"Fitting GaussianHMM with {n_components} components...")
     X = features_df[feature_cols].values
     
-    # We use diagonal covariance (diag) to avoid overfitting, with a fixed random state
+    # We use full covariance (full) to capture correlations between features
     model = hmm.GaussianHMM(
         n_components=n_components, 
-        covariance_type="diag", 
+        covariance_type="full", 
         n_iter=100, 
         random_state=random_state
     )

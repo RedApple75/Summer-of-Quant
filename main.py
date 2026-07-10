@@ -32,17 +32,17 @@ def main():
     # ─── 1. Data ─────────────────────────────────────────────────────────────
     print_section("1 / 6   Data Ingestion")
     df = load_data(start_date="2005-01-01", end_date="2024-01-01")
-    asset_returns = df[["SPY_ret", "TLT_ret", "GLD_ret"]].rename(
-        columns={"SPY_ret": "SPY", "TLT_ret": "TLT", "GLD_ret": "GLD"}
+    asset_returns = df[["SPY_ret", "TLT_ret", "GLD_ret", "BIL_ret"]].rename(
+        columns={"SPY_ret": "SPY", "TLT_ret": "TLT", "GLD_ret": "GLD", "BIL_ret": "BIL"}
     )
-    print(f"Assets:  SPY | TLT | GLD | ^VIX")
+    print(f"Assets:  SPY | TLT | GLD | BIL | ^VIX | ^TNX")
     print(f"Period:  {df.index[0].date()} -> {df.index[-1].date()}")
     print(f"Trading days: {len(df)}")
 
     # ─── 2. Features ─────────────────────────────────────────────────────────
     print_section("2 / 6   Feature Engineering")
     feat_df = compute_features(df)
-    feature_cols = ["mom_21d_zscore", "vol_21d_zscore"]
+    feature_cols = ["mom_21d_zscore", "VIX_zscore"]
     
     # Align returns
     common_idx = feat_df.index.intersection(asset_returns.index)
@@ -77,9 +77,15 @@ def main():
 
     # ─── 5. Backtest ─────────────────────────────────────────────────────────
     print_section("5 / 6   Portfolio Optimization & Backtest (Blended)")
-    # Using alpha_smooth=0.03 to balance transactions costs
+    # Extract TNX series for ZLB filter
+    tnx_series = df["TNX"].loc[regime_probs.index]
+    
+    # Using HMM H settings: 1.5x Bull leverage, 20% short SPY, ZLB active, asymmetric smoothing, 0.5% hurdle
     results = run_backtest_probabilities(
-        feat_df, regime_probs, asset_returns, lookback=252, tx_cost_bps=7, alpha_smooth=0.03
+        feat_df, regime_probs, asset_returns, lookback=252, tx_cost_bps=7,
+        alpha_smooth=0.03, cash_overlay=True, tnx_series=tnx_series, zlb_active=True,
+        leverage_factor=1.5, short_equity_allocation=0.20, borrow_cost_ann=0.04,
+        asymmetric_smoothing=True
     )
 
     # ─── 6. Performance Summary ───────────────────────────────────────────────

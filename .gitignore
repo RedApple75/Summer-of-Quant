@@ -10,3 +10,6 @@ __pycache__/
 
 # Helper/scratch scripts not part of deliverables
 parse_notebook.py
+
+# Research sandbox
+research/

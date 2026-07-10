@@ -63,7 +63,7 @@ def run_walk_forward(features_df, feature_cols, n_splits=5, min_train_size=252,
         # --- Fit HMM on training data only ---
         model = hmm.GaussianHMM(
             n_components=n_components,
-            covariance_type="diag",
+            covariance_type="full",
             n_iter=100,
             random_state=random_state
         )
@@ -118,7 +118,7 @@ def run_walk_forward_probabilities(features_df, feature_cols, n_splits=5, min_tr
 
         model = hmm.GaussianHMM(
             n_components=n_components,
-            covariance_type="diag",
+            covariance_type="full",
             n_iter=100,
             random_state=random_state
         )
