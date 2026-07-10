@@ -71,17 +71,17 @@ The new strategy succeeds because of three key architectural updates:
 
 1. **Soft Probability Blending:** Rather than triggering abrupt shifts to a single regime, the engine calculates a blended allocation weighted by the daily HMM state probabilities:
 
-\[
+```math
   \mathbf{w}_{\text{target}, t} = P(\text{Bull}_t)\mathbf{w}_{\text{Bull}, t} + P(\text{Bear}_t)\mathbf{w}_{\text{Bear}, t} + P(\text{Crisis}_t)\mathbf{w}_{\text{Crisis}, t}
-\]
+```
 
 This creates smooth, continuous transitions rather than sudden portfolio churn.
 
 2. **Exponential Smoothing:** An exponential smoothing filter ($\alpha = 0.03$) is applied to target weights:
 
-\[
+```math
   \mathbf{w}_{\text{smooth}, t} = \alpha\mathbf{w}_{\text{target}, t} + (1 - \alpha)\mathbf{w}_{\text{smooth}, t-1}
-\]
+```
 
 This simulates gradual trade execution over time, reducing daily turnover and keeping transaction cost drag low.
 
